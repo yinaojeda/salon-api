@@ -1,0 +1,273 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Tenancy
+// ─────────────────────────────────────────────
+
+model Salon {
+  id        Int      @id @default(autoincrement())
+  name      String
+  slug      String   @unique // para URLs / subdominio futuro
+  phone     String?
+  address   String?
+  timezone  String   @default("America/Asuncion")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  users        User[]
+  employees    Employee[]
+  clients      Client[]
+  categories   Category[]
+  services     Service[]
+  appointments Appointment[]
+  payments     Payment[]
+  commissions  Commission[]
+  payouts      CommissionPayout[]
+  reminders    Reminder[]
+}
+
+enum Role {
+  SUPER_ADMIN // vos, cross-tenant
+  ADMIN // dueño del salón
+  RECEPCIONISTA
+  PROFESIONAL // empleado con login: ve su agenda y comisiones
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  salonId   Int? // null solo para SUPER_ADMIN
+  salon     Salon?   @relation(fields: [salonId], references: [id])
+  email     String   @unique
+  password  String
+  name      String
+  role      Role
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  employee Employee?
+
+  @@index([salonId])
+}
+
+// ─────────────────────────────────────────────
+// Catálogo
+// ─────────────────────────────────────────────
+
+model Employee {
+  id      Int     @id @default(autoincrement())
+  salonId Int
+  salon   Salon   @relation(fields: [salonId], references: [id])
+  userId  Int?    @unique // opcional: no todos los profesionales tienen login
+  user    User?   @relation(fields: [userId], references: [id])
+  name    String
+  phone   String?
+  active  Boolean @default(true)
+
+  appointmentServices AppointmentService[]
+  commissions         Commission[]
+  payouts             CommissionPayout[]
+
+  @@index([salonId])
+}
+
+model Client {
+  id        Int       @id @default(autoincrement())
+  salonId   Int
+  salon     Salon     @relation(fields: [salonId], references: [id])
+  name      String
+  phone     String // E.164 para WhatsApp: +5959xxxxxxxx
+  email     String?
+  birthday  DateTime?
+  notes     String?
+  createdAt DateTime  @default(now())
+
+  appointments Appointment[]
+
+  @@unique([salonId, phone])
+  @@index([salonId, name])
+}
+
+model Category {
+  id      Int     @id @default(autoincrement())
+  salonId Int
+  salon   Salon   @relation(fields: [salonId], references: [id])
+  name    String
+  active  Boolean @default(true)
+
+  services Service[]
+
+  @@unique([salonId, name])
+  @@index([salonId])
+}
+
+model Service {
+  id            Int       @id @default(autoincrement())
+  salonId       Int
+  salon         Salon     @relation(fields: [salonId], references: [id])
+  name          String
+  categoryId    Int?
+  category      Category? @relation(fields: [categoryId], references: [id])
+  durationMin   Int
+  price         Int // guaraníes
+  commissionPct Int // % entero: 40 = 40%
+  active        Boolean   @default(true)
+
+  appointmentServices AppointmentService[]
+
+  @@unique([salonId, name])
+  @@index([salonId])
+  @@index([categoryId])
+}
+
+// ─────────────────────────────────────────────
+// Turnos
+// ─────────────────────────────────────────────
+
+enum AppointmentStatus {
+  PENDIENTE
+  CONFIRMADO
+  EN_CURSO
+  COMPLETADO
+  CANCELADO
+  NO_SHOW
+}
+
+model Appointment {
+  id          Int               @id @default(autoincrement())
+  salonId     Int
+  salon       Salon             @relation(fields: [salonId], references: [id])
+  clientId    Int
+  client      Client            @relation(fields: [clientId], references: [id])
+  startsAt    DateTime
+  endsAt      DateTime // startsAt + suma de duraciones
+  status      AppointmentStatus @default(PENDIENTE)
+  notes       String?
+  createdById Int? // User que lo registró
+  createdAt   DateTime          @default(now())
+
+  services  AppointmentService[]
+  payments  Payment[]
+  reminders Reminder[]
+
+  @@index([salonId, startsAt])
+  @@index([salonId, status])
+}
+
+model AppointmentService {
+  id            Int         @id @default(autoincrement())
+  appointmentId Int
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  serviceId     Int
+  service       Service     @relation(fields: [serviceId], references: [id])
+  employeeId    Int
+  employee      Employee    @relation(fields: [employeeId], references: [id])
+
+  // snapshots: cambiar el catálogo nunca reescribe la historia
+  priceSnapshot         Int
+  commissionPctSnapshot Int
+  durationMin           Int
+
+  commission Commission?
+
+  @@index([employeeId])
+  @@index([appointmentId])
+}
+
+// ─────────────────────────────────────────────
+// Pagos y comisiones
+// ─────────────────────────────────────────────
+
+enum PaymentMethod {
+  EFECTIVO
+  TRANSFERENCIA
+  TARJETA
+  QR
+}
+
+model Payment {
+  id            Int           @id @default(autoincrement())
+  salonId       Int
+  salon         Salon         @relation(fields: [salonId], references: [id])
+  appointmentId Int
+  appointment   Appointment   @relation(fields: [appointmentId], references: [id])
+  method        PaymentMethod
+  amount        Int // guaraníes
+  paidAt        DateTime      @default(now())
+  receivedById  Int? // User que cobró
+
+  @@index([salonId, paidAt])
+}
+
+enum CommissionStatus {
+  PENDIENTE
+  LIQUIDADA
+}
+
+model Commission {
+  id                   Int                @id @default(autoincrement())
+  salonId              Int
+  salon                Salon              @relation(fields: [salonId], references: [id])
+  appointmentServiceId Int                @unique // 1:1 — guardia de idempotencia
+  appointmentService   AppointmentService @relation(fields: [appointmentServiceId], references: [id])
+  employeeId           Int
+  employee             Employee           @relation(fields: [employeeId], references: [id])
+  baseAmount           Int // priceSnapshot
+  pct                  Int // commissionPctSnapshot
+  amount               Int // round(base * pct / 100)
+  status               CommissionStatus   @default(PENDIENTE)
+  createdAt            DateTime           @default(now())
+
+  payoutId Int?
+  payout   CommissionPayout? @relation(fields: [payoutId], references: [id])
+
+  @@index([salonId, employeeId, status])
+}
+
+model CommissionPayout {
+  id          Int      @id @default(autoincrement())
+  salonId     Int
+  salon       Salon    @relation(fields: [salonId], references: [id])
+  employeeId  Int
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  periodStart DateTime
+  periodEnd   DateTime
+  total       Int
+  paidAt      DateTime @default(now())
+
+  commissions Commission[]
+
+  @@index([salonId, employeeId])
+}
+
+// ─────────────────────────────────────────────
+// Recordatorios (WhatsApp Cloud API)
+// ─────────────────────────────────────────────
+
+enum ReminderStatus {
+  PENDIENTE
+  ENVIADO
+  FALLIDO
+  CANCELADO
+}
+
+model Reminder {
+  id            Int            @id @default(autoincrement())
+  salonId       Int
+  salon         Salon          @relation(fields: [salonId], references: [id])
+  appointmentId Int
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  sendAt        DateTime // ej. startsAt - 24h
+  status        ReminderStatus @default(PENDIENTE)
+  waMessageId   String? // id devuelto por la Cloud API
+  error         String?
+  sentAt        DateTime?
+
+  @@index([status, sendAt]) // el cron escanea por acá
+}
