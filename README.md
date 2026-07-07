@@ -31,6 +31,26 @@ curl -X POST http://localhost:3000/api/clients \
 curl http://localhost:3000/api/clients -H "Authorization: Bearer TOKEN"
 ```
 
+## Módulos
+
+| Módulo | Qué maneja |
+|---|---|
+| `auth` | Login, JWT |
+| `clients` | Clientes del salón |
+| `categories` | Categorías de servicios (p.ej. Peluquería, Barbería, Spa, Uñas) |
+| `services` | Catálogo de servicios — cada uno referencia una `category` opcional |
+| `employees` | Profesionales del salón |
+| `appointments` | Turnos, máquina de estados (Pendiente → Confirmado → En curso → Completado) |
+| `payments` | Pagos de turnos |
+| `commissions` | Comisiones por servicio completado y pagado, liquidación por profesional |
+| `reminders` | Recordatorios de turno (envío manual vía WhatsApp `wa.me`) |
+| `reports` | Reportes agregados |
+
+`categories` es una entidad propia (no un string suelto en `Service`):
+cada `Category` pertenece a un salón (`salonId`), tiene nombre único por
+salón y un flag `active` para desactivarla sin romper servicios históricos
+que ya la referencian.
+
 ## Arquitectura multi-tenant
 
 Cada request autenticado corre dentro de un `AsyncLocalStorage` con el
